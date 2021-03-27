@@ -1,0 +1,141 @@
+rm(list = ls())
+
+library("rnn")
+library("nnet")
+library("caret")
+library("varhandle")
+library("deepnet")
+library(e1071)
+library(hydroGOF)
+library(neuralnet)
+library(h2o)
+library(brnn)
+
+setwd("C:/Users/Shikha/Google Drive/E drive/Term 5/Independent project - SCM/Data")
+data<-read.csv("Foundries data v2.csv",header = TRUE)
+View(data)
+##Set all variables as numeric
+#Implementing ANN
+x<-as.double(data$This_month_value)
+x1<-as.double(data$Lag_1_months)
+x2<-as.double(data$Lag_2_months)
+x3<-as.double(data$Lag_3_months)
+x4<-as.double(data$Lag_4_months)
+data1<-as.data.frame(x)
+data2<-cbind(data1,x1)
+data3<-cbind(data2,x2)
+data4<-cbind(data3,x3)
+data5<-cbind(data4,x4)
+View(data5)
+index <- sample(1:nrow(data5),round(0.75*nrow(data5)))
+train <- data.frame(data5[index,1:5])
+test<- data.frame(data5[-index,1:5])
+#maxs <- apply(data, 2, max) 
+#mins <- apply(data, 2, min)
+set.seed(100)
+formula<-(x~.)
+nnet.fit <- nnet(formula, data=train, size=2,MaxNWts=100000, maxit = 100,linout=TRUE) 
+newpred<-predict(nnet.fit,data=test)
+#Fitted values obtained for training data
+fitted_values<-nnet.fit$fitted.values
+act_train<-x[index]
+fit_actual<-cbind(fitted_values,act_train)
+write.csv(fit_actual,"op_ANN_v2.csv")
+#prediction for test data
+pred_values<-predict(nnet.fit,newdata = test)
+act_test<-test <- data5[-index,1]
+perf_test<-cbind(pred_values,act_test)
+write.csv(perf_test,"pred_ANN_v2.csv")
+
+
+
+####h20
+h2o.init()
+h2o.init(max_mem_size = "5g")
+h20data<-as.h2o(train)
+auto_ensemble<-h2o.automl(x = 2:5,y = 1,training_frame = train,validation_frame =test )
+
+
+##caret
+traindat<-data.frame(data5[index,1:5])
+model2<-caret::train(data.frame(traindat[,2:5]),act_train,method="avNNet")
+model3<-train(data.frame(traindat[,2:5]),act_train,method="parRF")
+model4<-train(data.frame(traindat[,2:5]),act_train,method="svmLinear")
+#model5<-train(data.frame(traindat[,2:5]),act_train,method="nodeHarvest")
+
+
+pred_model2<-predict(model2,test[-1])
+pred_model3<-predict(model3,test[-1])
+pred_model4<-predict(model4,test[-1])
+#pred_model5<-predict(model5,test[-1])
+model_preds<-cbind(pred_model2,pred_model3,pred_model4)
+
+
+########Bayesian regularised neural networks
+
+#########Random hyperparameter search for models
+fitControl <- trainControl(method = "repeatedcv",
+                           number = 10,
+                           repeats = 10,p=.07,
+                           summaryFunction = defaultSummary,
+                           search = "random")
+
+set.seed(825)
+brnn_fit <- train(x ~ ., data = train, 
+                 method = "brnn",
+                 metric = "RMSE",
+                 tuneLength = 5,
+                 trControl = fitControl)
+brnn_fit
+#Prediction using best model
+pred_brnn<-predict(brnn_fit,data.frame(test[,-1]))
+model_preds<-cbind(pred_model2,pred_model3,pred_model4,pred_brnn)
+write.csv(model_preds,"ML_pred.csv")
+#Implementing RNN
+X<-matrix(x)
+X1<-matrix(x1)
+X2<-matrix(x2)
+X3<-matrix(x3)
+X4<-matrix(x4)
+#Standardise in range of 0-1
+X1 <- (X1 - min(X1)) / (max(X1) - min(X1))
+X2 <- (X2 - min(X2)) / (max(X2) - min(X2))
+X3 <- (X3 - min(X3)) / (max(X3) - min(X3))
+X4 <- (X4 - min(X4)) / (max(X4) - min(X4))
+Y <- (X - min(X)) / (max(X) - min(X))
+# Transpose
+mat<-array(c(X1[index],X2[index],X3[index],X4[index]),dim=c(dim(X1[index]),4))
+X1 <- t(mat)
+Y <- t(Y[index])
+
+ipset_r <- array( c(x1[index],x2[index],x3[index],x4[index]), dim=c(dim(x1[index]),4) )
+model_rnn<-trainr(Y=Y,X=X1,learningrate = 0.05,hidden_dim = 2,numepochs = 100)
+#take the 100th column as the final fitted value
+
+
+
+###########Restricted Boltzmann Machines
+x_rbm<-as.matrix(train)
+rbm_model<-rbm.train(x=x_rbm,hidden=10,learningrate = 0.8,momentum=0.5,numepochs = 10)
+nn.test(rbm_model,test)
+comput
+
+###Deep neural network
+dnn_model<-sae.dnn.train(as.matrix(train[,-1]),act_train,activationfun = "linear",output = "linear")
+dnn_pred<-nn.test(dnn_model,test,act_test)
+
+
+###############SVM##################
+svm_reg<-svm(x~x1+x2+x3+x4,data=as.data.frame(train))
+#Predict using SVM regression
+pred_svm<-predict(svm_reg,data=as.data.frame(x=test))
+write.csv("pred_svm.csv")
+#Calculate RMSE 
+RMSEsvm=rmse(pred_svm,act_train)
+
+
+##########Multiple Linear Regression
+lm_reg<-lm(x~x1+x2+x3+x4,data=train)
+fitted_reg<-fitted.values(lm_reg)
+pred_lm<-predict(lm_reg,as.data.frame(test))
+write.csv(pred_lm,"pred_lm.csv")
